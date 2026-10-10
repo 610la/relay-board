@@ -127,6 +127,16 @@
   }
 
   // ---- Nostr 实时订阅 ----
+  var subSeq = 0;
+  var liveSocks = [];
+  function sendReq(ws) {
+    if (!ws || ws.readyState !== 1) return;
+    subSeq++;
+    try {
+      ws.send(JSON.stringify(['REQ', 'rs' + subSeq,
+        { kinds: [1], authors: [PUBKEY], '#t': [TAG], limit: 3 }]));
+    } catch (e) {}
+  }
   function connectRelay(url) {
     var ws;
     try { ws = new WebSocket(url); } catch (e) { schedule(); return; }
@@ -135,18 +145,27 @@
     ws.onopen = function () {
       opened = true;
       markRelay(true);
-      ws.send(JSON.stringify(['REQ', 'relay-sub',
-        { kinds: [1], authors: [PUBKEY], '#t': [TAG], limit: 5 }]));
+      if (liveSocks.indexOf(ws) < 0) liveSocks.push(ws);
+      sendReq(ws);
     };
     ws.onmessage = function (ev) {
       var m;
       try { m = JSON.parse(ev.data); } catch (e) { return; }
-      if (m[0] === 'EVENT' && m[1] === 'relay-sub' && m[2]) handleContent(m[2].content);
+      if (m[0] === 'EVENT' && m[2]) handleContent(m[2].content);
     };
-    ws.onclose = function () { if (opened) markRelay(false); schedule(); };
+    ws.onclose = function () {
+      if (opened) markRelay(false);
+      var i = liveSocks.indexOf(ws);
+      if (i >= 0) liveSocks.splice(i, 1);
+      schedule();
+    };
     ws.onerror = function () { try { ws.close(); } catch (e) {} };
   }
   RELAYS.forEach(connectRelay);
+  // 每 5 秒在每条活连接上重新订阅一次，用历史记录兜底直播推送
+  setInterval(function () {
+    for (var i = 0; i < liveSocks.length; i++) sendReq(liveSocks[i]);
+  }, 5000);
 
   // ---- GitHub 备用同步（中继全断时兜底） ----
   var syncing = false;
