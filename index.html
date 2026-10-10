@@ -51,7 +51,7 @@
   <div class="head">
     <h1>传话板</h1>
     <span class="dot" id="dot"></span>
-    <span class="status" id="status">同步中…</span>
+    <span class="status" id="status">连接中…</span>
   </div>
   <div class="sub" id="meta"></div>
   <div class="card empty" id="card">还没有内容，让 hanhan 传一句话过来。</div>
@@ -63,7 +63,11 @@
 <div class="toast" id="toast">已复制</div>
 <script>
 (function () {
-  var CDN = 'https://cdn.jsdelivr.net/gh/610la/relay-board@master/message.json';
+  var RELAYS = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://nostr-pub.wellorder.net'];
+  var PUBKEY = 'd17a2dc9f06cb14680c0157a736a9e092869af00893580edb5a7654edc8c948d';
+  var TAG = 'relay-board-k7q3x9';
+  var GH_API = 'https://api.github.com/repos/610la/relay-board/contents/message.json?ref=master';
+
   var card = document.getElementById('card');
   var copyBtn = document.getElementById('copyBtn');
   var refreshBtn = document.getElementById('refreshBtn');
@@ -71,20 +75,27 @@
   var meta = document.getElementById('meta');
   var dot = document.getElementById('dot');
   var status = document.getElementById('status');
+
   var text = '';
   var lastKey = '';
+  var openRelays = 0;
 
   function setStatus(cls, msg) {
     dot.className = 'dot ' + cls;
     status.textContent = msg;
   }
 
-  function show(t, time) {
+  function show(t, time, via) {
+    var key = (time || '') + '|' + t;
+    if (key === lastKey) return;
+    lastKey = key;
     text = t;
     card.textContent = t;
     card.classList.remove('empty');
     copyBtn.style.display = 'block';
-    meta.textContent = '消息时间 ' + time + ' · 共 ' + t.length + ' 字';
+    meta.textContent = '消息时间 ' + time + ' · 共 ' + t.length + ' 字' + (via ? ' · ' + via : '');
+    setStatus('on', '已同步');
+    showToast('收到新消息');
   }
 
   function showToast(msg) {
@@ -101,33 +112,63 @@
     return new TextDecoder('utf-8').decode(bytes);
   }
 
+  function handleContent(content) {
+    try {
+      var obj = JSON.parse(content);
+      if (obj && obj.text) show(obj.text, obj.time || '', '实时');
+    } catch (e) {}
+  }
+
+  function markRelay(open) {
+    openRelays += open ? 1 : -1;
+    if (openRelays < 0) openRelays = 0;
+    if (openRelays > 0) setStatus('on', '实时连接中');
+    else setStatus('', '连接中…');
+  }
+
+  // ---- Nostr 实时订阅 ----
+  function connectRelay(url) {
+    var ws;
+    try { ws = new WebSocket(url); } catch (e) { schedule(); return; }
+    var opened = false;
+    function schedule() { setTimeout(function () { connectRelay(url); }, 4000); }
+    ws.onopen = function () {
+      opened = true;
+      markRelay(true);
+      ws.send(JSON.stringify(['REQ', 'relay-sub',
+        { kinds: [1], authors: [PUBKEY], '#t': [TAG], limit: 5 }]));
+    };
+    ws.onmessage = function (ev) {
+      var m;
+      try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (m[0] === 'EVENT' && m[1] === 'relay-sub' && m[2]) handleContent(m[2].content);
+    };
+    ws.onclose = function () { if (opened) markRelay(false); schedule(); };
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
+  }
+  RELAYS.forEach(connectRelay);
+
+  // ---- GitHub 备用同步（中继全断时兜底） ----
   var syncing = false;
-  function sync(manual) {
+  function syncBackup(manual) {
     if (syncing) return;
     syncing = true;
-    if (manual) setStatus('', '同步中…');
-    fetch(CDN + '?t=' + Date.now())
+    fetch(GH_API + '&_=' + Date.now())
       .then(function (r) {
-        if (!r.ok) throw new Error('同步失败(' + r.status + ')');
+        if (!r.ok) throw new Error('err ' + r.status);
         return r.json();
       })
-      .then(function (obj) {
+      .then(function (data) {
         syncing = false;
-        if (!obj || !obj.text) return;
-        var key = (obj.time || '') + '|' + obj.text;
-        if (key === lastKey) {
-          setStatus('on', '已是最新');
-          return;
+        if (!data || !data.content) return;
+        var obj = JSON.parse(b64DecodeUnicode(data.content));
+        if (obj && obj.text) {
+          var key = (obj.time || '') + '|' + obj.text;
+          if (key !== lastKey) show(obj.text, obj.time || '', '备用');
+          else if (manual) showToast('已经是最新');
         }
-        lastKey = key;
-        show(obj.text, obj.time || '');
-        setStatus('on', '已同步');
-        showToast('收到新消息');
       })
-      .catch(function (e) {
-        syncing = false;
-        setStatus('off', e.message || '同步失败');
-      });
+      .catch(function () { syncing = false; if (manual) showToast('备用同步失败'); });
   }
 
   // 兼容旧的 hash 链接
@@ -136,9 +177,10 @@
     if (h) {
       var s = h.replace(/-/g, '+').replace(/_/g, '/');
       while (s.length % 4) s += '=';
-      show(b64DecodeUnicode(s), '');
+      var t0 = b64DecodeUnicode(s);
+      try { handleContent(t0); } catch (e0) { show(t0, '', '链接'); }
     }
-  } catch (e) {}
+  } catch (e1) {}
 
   copyBtn.addEventListener('click', function () {
     function done(ok) { showToast(ok ? '已复制，去粘贴吧' : '复制失败，长按文字手动复制'); }
@@ -155,13 +197,13 @@
     }
   });
 
-  refreshBtn.addEventListener('click', function () { sync(true); });
+  refreshBtn.addEventListener('click', function () { syncBackup(true); });
   document.addEventListener('visibilitychange', function () {
-    if (!document.hidden) sync(false);
+    if (!document.hidden) syncBackup(false);
   });
 
-  sync(false);
-  setInterval(function () { sync(false); }, 3000);
+  syncBackup(false);
+  setInterval(function () { syncBackup(false); }, 70000);
 })();
 </script>
 </body>
