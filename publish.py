@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""往传话板推送内容：把文本写进 message.json，commit 并 push 到 GitHub，
-页面通过 GitHub API 轮询读取，约一分钟内显示。
+"""往传话板推送内容：写进 message.json，commit/push 到 GitHub，
+然后清 jsDelivr CDN 缓存；页面 3 秒轮询 CDN，约 10 秒内显示。
 用法： echo "要传的话" | python3 publish.py
 """
 import json
 import subprocess
 import sys
 import time
+import urllib.request
 
 REPO_DIR = "/home/hatch/workspace/relay-board"
+CDN_FILE = "https://cdn.jsdelivr.net/gh/610la/relay-board@master/message.json"
 
 
 def sh(*args: str) -> None:
@@ -30,7 +32,13 @@ def main() -> None:
     sh("git", "-c", "user.name=hanhan", "-c", "user.email=hanhan@local",
        "commit", "-qm", "传话更新")
     sh("git", "push", "-q", "origin", "master")
-    print(f"已推送 {len(text)} 字，约一分钟内显示在页面上")
+    try:
+        req = urllib.request.Request(
+            "https://purge.jsdelivr.net/gh/610la/relay-board@master/message.json")
+        urllib.request.urlopen(req, timeout=20).read()
+        print(f"已推送 {len(text)} 字，约 10 秒内显示在页面上")
+    except Exception as e:  # noqa: BLE001
+        print(f"已推送 {len(text)} 字，但清 CDN 缓存失败（{e}），页面稍后同步")
 
 
 if __name__ == "__main__":

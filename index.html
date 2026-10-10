@@ -63,7 +63,7 @@
 <div class="toast" id="toast">已复制</div>
 <script>
 (function () {
-  var API = 'https://api.github.com/repos/610la/relay-board/contents/message.json?ref=master';
+  var CDN = 'https://cdn.jsdelivr.net/gh/610la/relay-board@master/message.json';
   var card = document.getElementById('card');
   var copyBtn = document.getElementById('copyBtn');
   var refreshBtn = document.getElementById('refreshBtn');
@@ -72,7 +72,7 @@
   var dot = document.getElementById('dot');
   var status = document.getElementById('status');
   var text = '';
-  var lastSha = '';
+  var lastKey = '';
 
   function setStatus(cls, msg) {
     dot.className = 'dot ' + cls;
@@ -106,26 +106,23 @@
     if (syncing) return;
     syncing = true;
     if (manual) setStatus('', '同步中…');
-    fetch(API + '&_=' + Date.now())
+    fetch(CDN + '?t=' + Date.now())
       .then(function (r) {
-        if (r.status === 403) throw new Error('接口限流，稍后自动重试');
         if (!r.ok) throw new Error('同步失败(' + r.status + ')');
         return r.json();
       })
-      .then(function (data) {
+      .then(function (obj) {
         syncing = false;
-        if (!data || !data.content) return;
-        if (data.sha === lastSha) {
+        if (!obj || !obj.text) return;
+        var key = (obj.time || '') + '|' + obj.text;
+        if (key === lastKey) {
           setStatus('on', '已是最新');
           return;
         }
-        lastSha = data.sha;
-        var obj = JSON.parse(b64DecodeUnicode(data.content));
-        if (obj && obj.text) {
-          show(obj.text, obj.time || '');
-          setStatus('on', '已同步');
-          showToast('收到新消息');
-        }
+        lastKey = key;
+        show(obj.text, obj.time || '');
+        setStatus('on', '已同步');
+        showToast('收到新消息');
       })
       .catch(function (e) {
         syncing = false;
@@ -164,7 +161,7 @@
   });
 
   sync(false);
-  setInterval(function () { sync(false); }, 70000);
+  setInterval(function () { sync(false); }, 3000);
 })();
 </script>
 </body>
