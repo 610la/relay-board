@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""往传话板推送内容：从 stdin 读文本，以 retain 方式发到 MQTT，页面实时显示。
+"""往传话板推送内容：把文本写进 message.json，commit 并 push 到 GitHub，
+页面通过 GitHub API 轮询读取，约一分钟内显示。
 用法： echo "要传的话" | python3 publish.py
 """
 import json
+import subprocess
 import sys
 import time
 
-import paho.mqtt.client as mqtt
+REPO_DIR = "/home/hatch/workspace/relay-board"
 
-BROKER = "broker.emqx.io"
-PORT = 1883
-TOPIC = "relay-board/610la/k7q3x9"
+
+def sh(*args: str) -> None:
+    subprocess.run(args, cwd=REPO_DIR, check=True,
+                   capture_output=True, text=True)
 
 
 def main() -> None:
@@ -18,15 +21,16 @@ def main() -> None:
     if not text.strip():
         print("空内容，不发送", file=sys.stderr)
         sys.exit(1)
-    payload = json.dumps(
-        {"text": text, "time": time.strftime("%Y-%m-%d %H:%M")},
-        ensure_ascii=False,
-    )
-    c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-    c.connect(BROKER, PORT, 60)
-    c.publish(TOPIC, payload, qos=1, retain=True)
-    c.disconnect()
-    print(f"已推送 {len(text)} 字")
+    msg = {"text": text,
+           "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+    with open(f"{REPO_DIR}/message.json", "w",
+              encoding="utf-8") as f:
+        json.dump(msg, f, ensure_ascii=False)
+    sh("git", "add", "message.json")
+    sh("git", "-c", "user.name=hanhan", "-c", "user.email=hanhan@local",
+       "commit", "-qm", "传话更新")
+    sh("git", "push", "-q", "origin", "master")
+    print(f"已推送 {len(text)} 字，约一分钟内显示在页面上")
 
 
 if __name__ == "__main__":

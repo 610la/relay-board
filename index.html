@@ -28,13 +28,14 @@
     min-height: 120px;
   }
   .card.empty { color: #aeaeb2; }
+  .row { display: flex; gap: 10px; margin-top: 16px; }
   .btn {
-    display: block; width: 100%; margin-top: 16px;
-    padding: 15px; font-size: 17px; font-weight: 600;
+    flex: 1; padding: 15px; font-size: 17px; font-weight: 600;
     color: #fff; background: #0071e3; border: none; border-radius: 14px;
     cursor: pointer;
   }
   .btn:active { background: #0060c9; }
+  .btn.ghost { background: #e8e8ed; color: #1d1d1f; flex: 0 0 auto; padding: 15px 22px; }
   .toast {
     position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%);
     background: rgba(0,0,0,.8); color: #fff; font-size: 14px;
@@ -50,36 +51,40 @@
   <div class="head">
     <h1>传话板</h1>
     <span class="dot" id="dot"></span>
-    <span class="status" id="status">连接中…</span>
+    <span class="status" id="status">同步中…</span>
   </div>
   <div class="sub" id="meta"></div>
   <div class="card empty" id="card">还没有内容，让 hanhan 传一句话过来。</div>
-  <button class="btn" id="copyBtn" style="display:none">复制</button>
+  <div class="row">
+    <button class="btn" id="copyBtn" style="display:none">复制</button>
+    <button class="btn ghost" id="refreshBtn">刷新</button>
+  </div>
 </div>
 <div class="toast" id="toast">已复制</div>
-<script src="mqtt.min.js"></script>
 <script>
 (function () {
-  var TOPIC = 'relay-board/610la/k7q3x9';
+  var API = 'https://api.github.com/repos/610la/relay-board/contents/message.json?ref=master';
   var card = document.getElementById('card');
-  var btn = document.getElementById('copyBtn');
+  var copyBtn = document.getElementById('copyBtn');
+  var refreshBtn = document.getElementById('refreshBtn');
   var toast = document.getElementById('toast');
   var meta = document.getElementById('meta');
   var dot = document.getElementById('dot');
   var status = document.getElementById('status');
   var text = '';
+  var lastSha = '';
+
+  function setStatus(cls, msg) {
+    dot.className = 'dot ' + cls;
+    status.textContent = msg;
+  }
 
   function show(t, time) {
     text = t;
     card.textContent = t;
     card.classList.remove('empty');
-    btn.style.display = 'block';
-    meta.textContent = (time || new Date().toLocaleString('zh-CN')) + ' · 共 ' + t.length + ' 字';
-  }
-
-  function setStatus(cls, msg) {
-    dot.className = 'dot ' + cls;
-    status.textContent = msg;
+    copyBtn.style.display = 'block';
+    meta.textContent = '消息时间 ' + time + ' · 共 ' + t.length + ' 字';
   }
 
   function showToast(msg) {
@@ -88,22 +93,57 @@
     setTimeout(function () { toast.classList.remove('show'); }, 1600);
   }
 
-  function b64urlDecode(s) {
-    s = s.replace(/-/g, '+').replace(/_/g, '/');
-    while (s.length % 4) s += '=';
+  function b64DecodeUnicode(s) {
+    s = s.replace(/\s/g, '');
     var bin = atob(s);
     var bytes = new Uint8Array(bin.length);
     for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     return new TextDecoder('utf-8').decode(bytes);
   }
 
+  var syncing = false;
+  function sync(manual) {
+    if (syncing) return;
+    syncing = true;
+    if (manual) setStatus('', '同步中…');
+    fetch(API + '&_=' + Date.now())
+      .then(function (r) {
+        if (r.status === 403) throw new Error('接口限流，稍后自动重试');
+        if (!r.ok) throw new Error('同步失败(' + r.status + ')');
+        return r.json();
+      })
+      .then(function (data) {
+        syncing = false;
+        if (!data || !data.content) return;
+        if (data.sha === lastSha) {
+          setStatus('on', '已是最新');
+          return;
+        }
+        lastSha = data.sha;
+        var obj = JSON.parse(b64DecodeUnicode(data.content));
+        if (obj && obj.text) {
+          show(obj.text, obj.time || '');
+          setStatus('on', '已同步');
+          showToast('收到新消息');
+        }
+      })
+      .catch(function (e) {
+        syncing = false;
+        setStatus('off', e.message || '同步失败');
+      });
+  }
+
   // 兼容旧的 hash 链接
   try {
     var h = location.hash.replace(/^#/, '');
-    if (h) { show(b64urlDecode(h)); }
+    if (h) {
+      var s = h.replace(/-/g, '+').replace(/_/g, '/');
+      while (s.length % 4) s += '=';
+      show(b64DecodeUnicode(s), '');
+    }
   } catch (e) {}
 
-  btn.addEventListener('click', function () {
+  copyBtn.addEventListener('click', function () {
     function done(ok) { showToast(ok ? '已复制，去粘贴吧' : '复制失败，长按文字手动复制'); }
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
@@ -118,30 +158,13 @@
     }
   });
 
-  try {
-    var client = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
-      reconnectPeriod: 3000,
-      connectTimeout: 15000
-    });
-    client.on('connect', function () {
-      setStatus('on', '已连接');
-      client.subscribe(TOPIC, { qos: 1 });
-    });
-    client.on('reconnect', function () { setStatus('', '重连中…'); });
-    client.on('offline', function () { setStatus('off', '已断开'); });
-    client.on('error', function () { setStatus('off', '连接出错'); });
-    client.on('message', function (topic, payload) {
-      if (topic !== TOPIC) return;
-      var s = payload.toString();
-      try {
-        var obj = JSON.parse(s);
-        if (obj && obj.text) show(obj.text, obj.time);
-        else show(s);
-      } catch (e) { show(s); }
-    });
-  } catch (e) {
-    setStatus('off', '连接失败');
-  }
+  refreshBtn.addEventListener('click', function () { sync(true); });
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) sync(false);
+  });
+
+  sync(false);
+  setInterval(function () { sync(false); }, 70000);
 })();
 </script>
 </body>
