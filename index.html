@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>传话板</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 24px 16px 40px;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f5f5f7; color: #1d1d1f;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { font-size: 13px; color: #86868b; margin-bottom: 16px; }
+  .card {
+    background: #fff; border-radius: 14px; padding: 18px;
+    box-shadow: 0 2px 12px rgba(0,0,0,.06);
+    font-size: 16px; line-height: 1.7;
+    white-space: pre-wrap; word-break: break-word;
+    min-height: 120px;
+  }
+  .card.empty { color: #aeaeb2; }
+  .btn {
+    display: block; width: 100%; margin-top: 16px;
+    padding: 15px; font-size: 17px; font-weight: 600;
+    color: #fff; background: #0071e3; border: none; border-radius: 14px;
+    cursor: pointer;
+  }
+  .btn:active { background: #0060c9; }
+  .toast {
+    position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%);
+    background: rgba(0,0,0,.8); color: #fff; font-size: 14px;
+    padding: 10px 20px; border-radius: 20px;
+    opacity: 0; transition: opacity .25s; pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>传话板</h1>
+  <div class="sub" id="meta"></div>
+  <div class="card empty" id="card">还没有内容，让 hanhan 发个链接过来。</div>
+  <button class="btn" id="copyBtn" style="display:none">复制</button>
+</div>
+<div class="toast" id="toast">已复制</div>
+<script>
+(function () {
+  var card = document.getElementById('card');
+  var btn = document.getElementById('copyBtn');
+  var toast = document.getElementById('toast');
+  var meta = document.getElementById('meta');
+
+  function b64urlDecode(s) {
+    s = s.replace(/-/g, '+').replace(/_/g, '/');
+    while (s.length % 4) s += '=';
+    var bin = atob(s);
+    var bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder('utf-8').decode(bytes);
+  }
+
+  var text = '';
+  try {
+    var h = location.hash.replace(/^#/, '');
+    if (h) text = b64urlDecode(h);
+  } catch (e) { text = ''; }
+
+  if (text) {
+    card.textContent = text;
+    card.classList.remove('empty');
+    btn.style.display = 'block';
+    meta.textContent = new Date().toLocaleString('zh-CN') + ' · 共 ' + text.length + ' 字';
+  }
+
+  function showToast(msg) {
+    toast.textContent = msg;
+    toast.classList.add('show');
+    setTimeout(function () { toast.classList.remove('show'); }, 1600);
+  }
+
+  btn.addEventListener('click', function () {
+    function done(ok) { showToast(ok ? '已复制，去粘贴吧' : '复制失败，长按文字手动复制'); }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { done(document.execCommand('copy')); } catch (e) { done(false); }
+      document.body.removeChild(ta);
+    }
+  });
+})();
+</script>
+</body>
+</html>
