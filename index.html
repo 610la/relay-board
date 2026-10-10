@@ -13,8 +13,13 @@
     min-height: 100vh;
   }
   .wrap { max-width: 640px; margin: 0 auto; }
-  h1 { font-size: 20px; margin: 0 0 4px; }
-  .sub { font-size: 13px; color: #86868b; margin-bottom: 16px; }
+  .head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  h1 { font-size: 20px; margin: 0; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #c7c7cc; flex: none; }
+  .dot.on { background: #34c759; }
+  .dot.off { background: #ff3b30; }
+  .status { font-size: 12px; color: #86868b; }
+  .sub { font-size: 13px; color: #86868b; margin: 6px 0 16px; }
   .card {
     background: #fff; border-radius: 14px; padding: 18px;
     box-shadow: 0 2px 12px rgba(0,0,0,.06);
@@ -35,24 +40,53 @@
     background: rgba(0,0,0,.8); color: #fff; font-size: 14px;
     padding: 10px 20px; border-radius: 20px;
     opacity: 0; transition: opacity .25s; pointer-events: none;
+    white-space: nowrap;
   }
   .toast.show { opacity: 1; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>传话板</h1>
+  <div class="head">
+    <h1>传话板</h1>
+    <span class="dot" id="dot"></span>
+    <span class="status" id="status">连接中…</span>
+  </div>
   <div class="sub" id="meta"></div>
-  <div class="card empty" id="card">还没有内容，让 hanhan 发个链接过来。</div>
+  <div class="card empty" id="card">还没有内容，让 hanhan 传一句话过来。</div>
   <button class="btn" id="copyBtn" style="display:none">复制</button>
 </div>
 <div class="toast" id="toast">已复制</div>
+<script src="mqtt.min.js"></script>
 <script>
 (function () {
+  var TOPIC = 'relay-board/610la/k7q3x9';
   var card = document.getElementById('card');
   var btn = document.getElementById('copyBtn');
   var toast = document.getElementById('toast');
   var meta = document.getElementById('meta');
+  var dot = document.getElementById('dot');
+  var status = document.getElementById('status');
+  var text = '';
+
+  function show(t, time) {
+    text = t;
+    card.textContent = t;
+    card.classList.remove('empty');
+    btn.style.display = 'block';
+    meta.textContent = (time || new Date().toLocaleString('zh-CN')) + ' · 共 ' + t.length + ' 字';
+  }
+
+  function setStatus(cls, msg) {
+    dot.className = 'dot ' + cls;
+    status.textContent = msg;
+  }
+
+  function showToast(msg) {
+    toast.textContent = msg;
+    toast.classList.add('show');
+    setTimeout(function () { toast.classList.remove('show'); }, 1600);
+  }
 
   function b64urlDecode(s) {
     s = s.replace(/-/g, '+').replace(/_/g, '/');
@@ -63,24 +97,11 @@
     return new TextDecoder('utf-8').decode(bytes);
   }
 
-  var text = '';
+  // 兼容旧的 hash 链接
   try {
     var h = location.hash.replace(/^#/, '');
-    if (h) text = b64urlDecode(h);
-  } catch (e) { text = ''; }
-
-  if (text) {
-    card.textContent = text;
-    card.classList.remove('empty');
-    btn.style.display = 'block';
-    meta.textContent = new Date().toLocaleString('zh-CN') + ' · 共 ' + text.length + ' 字';
-  }
-
-  function showToast(msg) {
-    toast.textContent = msg;
-    toast.classList.add('show');
-    setTimeout(function () { toast.classList.remove('show'); }, 1600);
-  }
+    if (h) { show(b64urlDecode(h)); }
+  } catch (e) {}
 
   btn.addEventListener('click', function () {
     function done(ok) { showToast(ok ? '已复制，去粘贴吧' : '复制失败，长按文字手动复制'); }
@@ -96,6 +117,31 @@
       document.body.removeChild(ta);
     }
   });
+
+  try {
+    var client = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
+      reconnectPeriod: 3000,
+      connectTimeout: 15000
+    });
+    client.on('connect', function () {
+      setStatus('on', '已连接');
+      client.subscribe(TOPIC, { qos: 1 });
+    });
+    client.on('reconnect', function () { setStatus('', '重连中…'); });
+    client.on('offline', function () { setStatus('off', '已断开'); });
+    client.on('error', function () { setStatus('off', '连接出错'); });
+    client.on('message', function (topic, payload) {
+      if (topic !== TOPIC) return;
+      var s = payload.toString();
+      try {
+        var obj = JSON.parse(s);
+        if (obj && obj.text) show(obj.text, obj.time);
+        else show(s);
+      } catch (e) { show(s); }
+    });
+  } catch (e) {
+    setStatus('off', '连接失败');
+  }
 })();
 </script>
 </body>
